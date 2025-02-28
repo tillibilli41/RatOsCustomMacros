@@ -1,0 +1,90 @@
+#------------------------------Exhaust Fan Control---------------------------------------------------
+
+[gcode_macro EXHAUST_FAN_CONTROL]
+variable_slicer_chamber_temperature: 0
+variable_temperature_low: 30
+variable_fan_speed_low: 1.0
+variable_temperature_high: 70
+variable_fan_speed_high: 0.2  # Default changed from 0.1 to 0.2
+variable_temp_curve_slope: 0.293  # Adjusted to ensure 40% fan speed at 45°C
+
+## Example Fan Speeds at Different Temperatures
+## ----------------------------------------------------------------
+## | Chamber Temp | Linear (1.0) | Concave (1.5) | Convex (0.293) |
+## |-------------|-------------|-------------|---------------|
+## | 30°C        | 1.0 (100%)  | 1.0 (100%)  | 1.0 (100%)    |
+## | 40°C        | 0.85 (85%)  | 0.92 (92%)  | 0.63 (63%)    |
+## | 45°C        | 0.725 (73%) | 0.85 (85%)  | 0.40 (40%)    |  # Adjusted Target
+## | 50°C        | 0.70 (70%)  | 0.78 (78%)  | 0.28 (28%)    |
+## | 60°C        | 0.55 (55%)  | 0.54 (54%)  | 0.22 (22%)    |
+## | 70°C        | 0.2  (20%)  | 0.2  (20%)  | 0.2  (20%)    |
+## ----------------------------------------------------------------
+
+gcode:
+    {% if params and "S" in params %}
+        {% set slicer_temp = params.S|float %}
+        SET_GCODE_VARIABLE MACRO=EXHAUST_FAN_CONTROL VARIABLE=slicer_chamber_temperature VALUE={slicer_temp}
+    {% else %}
+        {% set slicer_temp = printer["gcode_macro EXHAUST_FAN_CONTROL"].slicer_chamber_temperature %}
+    {% endif %}
+
+    {% set t_low = printer["gcode_macro EXHAUST_FAN_CONTROL"].temperature_low %}
+    {% set t_high = printer["gcode_macro EXHAUST_FAN_CONTROL"].temperature_high %}
+    {% set speed_low = printer["gcode_macro EXHAUST_FAN_CONTROL"].fan_speed_low %}
+    {% set speed_high = printer["gcode_macro EXHAUST_FAN_CONTROL"].fan_speed_high %}
+    {% set curve_slope = printer["gcode_macro EXHAUST_FAN_CONTROL"].temp_curve_slope %}
+
+    {% if slicer_temp <= t_low %}
+        {% set fan_speed = speed_low %}
+    {% elif slicer_temp >= t_high %}
+        {% set fan_speed = speed_high %}
+    {% else %}
+        {% set temp_fraction = (slicer_temp - t_low) / (t_high - t_low) %}
+        {% set adjusted_fraction = temp_fraction**curve_slope %}
+        {% set fan_speed = speed_low - adjusted_fraction * (speed_low - speed_high) %}
+    {% endif %}
+
+    SET_FAN_SPEED FAN=chamber_exhaust_fan SPEED={fan_speed}
+
+
+
+#------------------------------Exhaust Fan Post Print---------------------------------------------------
+
+[gcode_macro EXHAUST_FAN_POST_PRINT]
+variable_delay_low: 60
+variable_delay_mid: 120
+variable_delay_high: 180
+variable_after_speed_low: 0.8
+variable_after_speed_mid: 0.9
+variable_after_speed_high: 1.0
+
+gcode:
+    {% set slicer_temp = printer["gcode_macro EXHAUST_FAN_CONTROL"].slicer_chamber_temperature %}
+    
+    {% if slicer_temp < printer["gcode_macro EXHAUST_FAN_CONTROL"].temperature_low %}
+        {% set after_speed = printer["gcode_macro EXHAUST_FAN_POST_PRINT"].after_speed_low %}
+        {% set delay = printer["gcode_macro EXHAUST_FAN_POST_PRINT"].delay_low %}
+    {% elif slicer_temp < printer["gcode_macro EXHAUST_FAN_CONTROL"].temperature_mid %}
+        {% set after_speed = printer["gcode_macro EXHAUST_FAN_POST_PRINT"].after_speed_mid %}
+        {% set delay = printer["gcode_macro EXHAUST_FAN_POST_PRINT"].delay_mid %}
+    {% else %}
+        {% set after_speed = printer["gcode_macro EXHAUST_FAN_POST_PRINT"].after_speed_high %}
+        {% set delay = printer["gcode_macro EXHAUST_FAN_POST_PRINT"].delay_high %}
+    {% endif %}
+
+    SET_FAN_SPEED FAN=chamber_exhaust_fan SPEED={after_speed}
+    RESPOND MSG="Post-print cooling: Fan set to {after_speed} for {delay} seconds"
+    
+    ; Schedule fan shutdown using delayed G-code (non-blocking)
+    UPDATE_DELAYED_GCODE ID=EXHAUST_FAN_SHUTDOWN DURATION={delay} 
+
+
+#------------------------------Exhaust Fan Delay---------------------------------------------------
+
+
+[delayed_gcode EXHAUST_FAN_SHUTDOWN]
+gcode:
+    SET_FAN_SPEED FAN=chamber_exhaust_fan SPEED=0.0
+    RESPOND MSG="Exhaust fan has been turned off after cooldown period."
+    
+    

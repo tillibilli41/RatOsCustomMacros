@@ -1,3 +1,28 @@
+#-----------------------------Print Start Exhaust Fan---------------------------------------------------
+[gcode_macro _USER_START_PRINT_BEFORE_HOMING]
+gcode:
+    ; Apply chamber temperature setting to exhaust fan control
+    SET_FAN_SPEED FAN=chamber_exhaust_fan SPEED=0
+
+    RESPOND MSG="Exhaust-Fan turned off for heat-up."
+
+    
+[gcode_macro _USER_END_START_PRINT]
+gcode:
+    {% set target_chamber_exhaust_fan = params.CHAMBER|default("40")|int %}
+
+    ; Apply chamber temperature setting to exhaust fan control
+    EXHAUST_FAN_CONTROL S={target_chamber_exhaust_fan}
+
+    RESPOND MSG="Exhaust-Fan set."
+
+
+
+#-----------------------------Print End Exhaust Fan---------------------------------------------------
+
+[gcode_macro _USER_END_PRINT_PARK]
+gcode: {% set target_chamber_exhaust_fan = 30|default("40")|int %}
+
 #------------------------------Exhaust Fan Control---------------------------------------------------
 
 [gcode_macro EXHAUST_FAN_CONTROL]
@@ -5,7 +30,7 @@ variable_slicer_chamber_temperature: 0
 variable_temperature_low: 30
 variable_fan_speed_low: 1.0
 variable_temperature_high: 70
-variable_fan_speed_high: 0.2  # Default changed from 0.1 to 0.2
+variable_fan_speed_high: 0.1  # Default changed from 0.1 to 0.2
 variable_temp_curve_slope: 0.293  # Adjusted to ensure 40% fan speed at 45°C
 
 ## Example Fan Speeds at Different Temperatures
@@ -52,31 +77,37 @@ gcode:
 
 [gcode_macro EXHAUST_FAN_POST_PRINT]
 variable_delay_low: 60
-variable_delay_mid: 120
 variable_delay_high: 180
-variable_after_speed_low: 0.8
-variable_after_speed_mid: 0.9
-variable_after_speed_high: 1.0
+variable_after_speed_low: 1
+variable_after_speed_high: 1
 
 gcode:
     {% set slicer_temp = printer["gcode_macro EXHAUST_FAN_CONTROL"].slicer_chamber_temperature %}
-    
-    {% if slicer_temp < printer["gcode_macro EXHAUST_FAN_CONTROL"].temperature_low %}
-        {% set after_speed = printer["gcode_macro EXHAUST_FAN_POST_PRINT"].after_speed_low %}
+    {% set t_low = printer["gcode_macro EXHAUST_FAN_CONTROL"].temperature_low %}
+    {% set t_high = printer["gcode_macro EXHAUST_FAN_CONTROL"].temperature_high %}
+    {% set speed_low = printer["gcode_macro EXHAUST_FAN_POST_PRINT"].after_speed_low %}
+    {% set speed_high = printer["gcode_macro EXHAUST_FAN_POST_PRINT"].after_speed_high %}
+    {% set curve_slope = printer["gcode_macro EXHAUST_FAN_CONTROL"].temp_curve_slope %}
+
+    {% if slicer_temp <= t_low %}
+        {% set after_speed = speed_low %}
         {% set delay = printer["gcode_macro EXHAUST_FAN_POST_PRINT"].delay_low %}
-    {% elif slicer_temp < printer["gcode_macro EXHAUST_FAN_CONTROL"].temperature_mid %}
-        {% set after_speed = printer["gcode_macro EXHAUST_FAN_POST_PRINT"].after_speed_mid %}
-        {% set delay = printer["gcode_macro EXHAUST_FAN_POST_PRINT"].delay_mid %}
-    {% else %}
-        {% set after_speed = printer["gcode_macro EXHAUST_FAN_POST_PRINT"].after_speed_high %}
+    {% elif slicer_temp >= t_high %}
+        {% set after_speed = speed_high %}
         {% set delay = printer["gcode_macro EXHAUST_FAN_POST_PRINT"].delay_high %}
+    {% else %}
+        {% set temp_fraction = (slicer_temp - t_low) / (t_high - t_low) %}
+        {% set adjusted_fraction = temp_fraction**curve_slope %}
+        {% set after_speed = speed_low - adjusted_fraction * (speed_low - speed_high) %}
+        {% set delay = printer["gcode_macro EXHAUST_FAN_POST_PRINT"].delay_low + adjusted_fraction * (printer["gcode_macro EXHAUST_FAN_POST_PRINT"].delay_high - printer["gcode_macro EXHAUST_FAN_POST_PRINT"].delay_low) %}
     {% endif %}
 
     SET_FAN_SPEED FAN=chamber_exhaust_fan SPEED={after_speed}
-    RESPOND MSG="Post-print cooling: Fan set to {after_speed} for {delay} seconds"
-    
+    RESPOND MSG="Post-print cooling: Exhaust-Fan set to {after_speed} for {delay} seconds"
+
     ; Schedule fan shutdown using delayed G-code (non-blocking)
     UPDATE_DELAYED_GCODE ID=EXHAUST_FAN_SHUTDOWN DURATION={delay} 
+
 
 
 #------------------------------Exhaust Fan Delay---------------------------------------------------
@@ -86,5 +117,7 @@ gcode:
 gcode:
     SET_FAN_SPEED FAN=chamber_exhaust_fan SPEED=0.0
     RESPOND MSG="Exhaust fan has been turned off after cooldown period."
+    
+    
     
     
